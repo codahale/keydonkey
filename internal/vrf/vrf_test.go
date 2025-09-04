@@ -10,12 +10,12 @@ import (
 func TestExamples(t *testing.T) {
 	for _, tv := range testVectors {
 		t.Run(tv.Name, func(t *testing.T) {
-			sk := NewSecretKey(tv.SK)
-			if got, want := sk.PublicKey.pub, tv.PK; !bytes.Equal(got, want) {
-				t.Errorf("NewSecretKey(%x) = %x, want = %x", tv.SK, got, want)
+			sk := NewProvingKey(tv.SK)
+			if got, want := sk.VerifyingKey.encoded, tv.PK; !bytes.Equal(got, want) {
+				t.Errorf("NewProvingKey(%x) = %x, want = %x", tv.SK, got, want)
 			}
 
-			pk, err := NewPublicKey(tv.PK)
+			pk, err := NewVerifyingKey(tv.PK)
 			if err != nil {
 				t.Fatal(err)
 			}

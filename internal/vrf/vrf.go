@@ -1,6 +1,4 @@
-// Package vrf provides an implementation of RFC9381 ECVRF-EDWARDS25519-SHA512-TAI.
-//
-// https://www.ietf.org/rfc/rfc9381.html
+// Package vrf provides an implementation of RFC 9381's ECVRF-EDWARDS25519-SHA512-TAI.
 package vrf
 
 import (
@@ -8,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding"
 	"errors"
+	"strconv"
 
 	"filippo.io/edwards25519"
 )
@@ -15,20 +14,24 @@ import (
 // ErrInvalidProof is returned when a proof is invalid.
 var ErrInvalidProof = errors.New("vrf: invalid proof")
 
-type PublicKey struct {
-	y   *edwards25519.Point
-	pub []byte
+// VerifyingKey is a public key which is used to verify proofs created by the corresponding ProvingKey.
+type VerifyingKey struct {
+	y       *edwards25519.Point
+	encoded []byte
 }
 
-func NewPublicKey(b []byte) (*PublicKey, error) {
+// NewVerifyingKey deserializes the given byte slice into a VerifyingKey. Returns an error if the byte slice is not a
+// valid Ed25519 point.
+func NewVerifyingKey(b []byte) (*VerifyingKey, error) {
 	q, err := new(edwards25519.Point).SetBytes(b)
 	if err != nil {
 		return nil, err
 	}
-	return &PublicKey{y: q, pub: b}, nil
+	return &VerifyingKey{y: q, encoded: b}, nil
 }
 
-func (pk *PublicKey) Verify(alpha, proof []byte) (hash []byte, err error) {
+// Verify the given input and proof. Returns a hash of the proof if valid, ErrInvalidProof if invalid.
+func (vk *VerifyingKey) Verify(alpha, proof []byte) (hash []byte, err error) {
 	gamma, err := new(edwards25519.Point).SetBytes(proof[:32])
 	if err != nil {
 		return nil, ErrInvalidProof
@@ -46,13 +49,13 @@ func (pk *PublicKey) Verify(alpha, proof []byte) (hash []byte, err error) {
 		return nil, ErrInvalidProof
 	}
 
-	h := encodeToCurve(pk.pub, alpha)
+	h := encodeToCurve(vk.encoded, alpha)
 	u := new(edwards25519.Point).ScalarBaseMult(s)
-	u.Subtract(u, new(edwards25519.Point).ScalarMult(c, pk.y))
+	u.Subtract(u, new(edwards25519.Point).ScalarMult(c, vk.y))
 	v := new(edwards25519.Point).ScalarMult(s, h)
 	v.Subtract(v, new(edwards25519.Point).ScalarMult(c, gamma))
 
-	cP := generateChallenge(pk.y, h, gamma, u, v)
+	cP := generateChallenge(vk.y, h, gamma, u, v)
 	if c.Equal(cP) == 1 {
 		return hashProof(gamma), nil
 	}
@@ -60,32 +63,41 @@ func (pk *PublicKey) Verify(alpha, proof []byte) (hash []byte, err error) {
 	return nil, ErrInvalidProof
 }
 
-func (pk *PublicKey) MarshalBinary() (data []byte, err error) {
-	return pk.pub, nil
+func (vk *VerifyingKey) MarshalBinary() (data []byte, err error) {
+	return vk.encoded, nil
 }
 
-func (pk *PublicKey) UnmarshalBinary(data []byte) (err error) {
-	x, err := NewPublicKey(data)
+func (vk *VerifyingKey) UnmarshalBinary(data []byte) (err error) {
+	x, err := NewVerifyingKey(data)
 	if err != nil {
 		return err
 	}
 
-	*pk = *x
+	*vk = *x
 	return nil
 }
 
 var (
-	_ encoding.BinaryMarshaler   = &PublicKey{}
-	_ encoding.BinaryUnmarshaler = &PublicKey{}
+	_ encoding.BinaryMarshaler   = &VerifyingKey{}
+	_ encoding.BinaryUnmarshaler = &VerifyingKey{}
 )
 
-type SecretKey struct {
-	x         *edwards25519.Scalar
-	prefix    []byte
-	PublicKey PublicKey
+// ProvingKey is a secret key which is used to create proofs which can be verified by the corresponding VerifyingKey.
+type ProvingKey struct {
+	x      *edwards25519.Scalar
+	prefix []byte
+
+	// VerifyingKey contains the VerifyingKey which corresponds to this ProvingKey.
+	VerifyingKey VerifyingKey
 }
 
-func NewSecretKey(seed []byte) *SecretKey {
+// NewProvingKey derives a ProvingKey and VerifyingKey pair from the given seed value. It will panic if len(seed) is not
+// ed25519.SeedSize.
+func NewProvingKey(seed []byte) *ProvingKey {
+	if len(seed) != ed25519.SeedSize {
+		panic("vrf: bad seed length: " + strconv.Itoa(len(seed)))
+	}
+
 	hs := sha512.New()
 	hs.Write(seed)
 	h := hs.Sum(nil)
@@ -96,22 +108,25 @@ func NewSecretKey(seed []byte) *SecretKey {
 	}
 
 	q := new(edwards25519.Point).ScalarBaseMult(x)
-	return &SecretKey{
+	return &ProvingKey{
 		x:      x,
 		prefix: h[32:],
-		PublicKey: PublicKey{
-			y:   q,
-			pub: q.Bytes(),
+		VerifyingKey: VerifyingKey{
+			y:       q,
+			encoded: q.Bytes(),
 		},
 	}
 }
 
-func (sk *SecretKey) Prove(alpha []byte) (proof, hash []byte) {
-	h := encodeToCurve(sk.PublicKey.pub, alpha)
-	gamma := new(edwards25519.Point).ScalarMult(sk.x, h)
-	k := generateNonce(sk.prefix, h.Bytes())
-	c := generateChallenge(sk.PublicKey.y, h, gamma, new(edwards25519.Point).ScalarBaseMult(k), new(edwards25519.Point).ScalarMult(k, h))
-	s := new(edwards25519.Scalar).MultiplyAdd(c, sk.x, k)
+// Prove returns a deterministic proof of the given byte slice and a hash of the proof. The proof can be verified but
+// offers no privacy guarantees with regard to the input; the hash cannot be verified but offers full privacy with
+// regard to the input.
+func (pk *ProvingKey) Prove(alpha []byte) (proof, hash []byte) {
+	h := encodeToCurve(pk.VerifyingKey.encoded, alpha)
+	gamma := new(edwards25519.Point).ScalarMult(pk.x, h)
+	k := generateNonce(pk.prefix, h.Bytes())
+	c := generateChallenge(pk.VerifyingKey.y, h, gamma, new(edwards25519.Point).ScalarBaseMult(k), new(edwards25519.Point).ScalarMult(k, h))
+	s := new(edwards25519.Scalar).MultiplyAdd(c, pk.x, k)
 	pi := gamma.Bytes()
 	pi = append(pi, c.Bytes()[:16]...)
 	pi = append(pi, s.Bytes()...)
@@ -164,7 +179,7 @@ func encodeToCurve(salt, alpha []byte) *edwards25519.Point {
 		hs.Write(salt)
 		hs.Write(alpha)
 		hs.Write([]byte{ctr, encodeDomainSeparatorBack})
-		if _, err := q.SetBytes(hs.Sum(nil)[:ed25519.SeedSize]); err == nil {
+		if _, err := q.SetBytes(hs.Sum(nil)[:32]); err == nil {
 			q.MultByCofactor(&q)
 			return &q
 		}
