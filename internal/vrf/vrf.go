@@ -1,4 +1,4 @@
-// Package vrf provides an implementation of RFC 9381's ECVRF-EDWARDS25519-SHA512-TAI.
+// Package vrf provides an implementation of RFC 9381's ECVRF-EDWARDS25519-SHA512-ELL2.
 package vrf
 
 import (
@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"filippo.io/edwards25519"
+	h2c "github.com/bytemare/hash2curve/edwards25519"
 )
 
 // ErrInvalidProof is returned when a proof is invalid.
@@ -171,27 +172,12 @@ func generateNonce(prefix, hash []byte) *edwards25519.Scalar {
 }
 
 func encodeToCurve(salt, alpha []byte) *edwards25519.Point {
-	var q edwards25519.Point
-
-	for ctr := byte(0); ctr < 255; ctr++ {
-		hs := sha512.New()
-		hs.Write([]byte{suite, encodeDomainSeparatorFront})
-		hs.Write(salt)
-		hs.Write(alpha)
-		hs.Write([]byte{ctr, encodeDomainSeparatorBack})
-		if _, err := q.SetBytes(hs.Sum(nil)[:32]); err == nil {
-			q.MultByCofactor(&q)
-			return &q
-		}
-	}
-
-	panic("vrf: unable to encode to curve")
+	input := append(salt, alpha...)
+	return h2c.EncodeToCurve(input, []byte("ECVRF_edwards25519_XMD:SHA-512_ELL2_NU_\004"))
 }
 
 const (
-	suite                         = 0x03
-	encodeDomainSeparatorFront    = 0x01
-	encodeDomainSeparatorBack     = 0x00
+	suite                         = 0x04
 	challengeDomainSeparatorFront = 0x02
 	challengeDomainSeparatorBack  = 0x00
 	proofDomainSeparatorFront     = 0x03
