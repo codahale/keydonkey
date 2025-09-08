@@ -11,20 +11,18 @@ import (
 
 	"filippo.io/torchwood/prefix"
 	"github.com/codahale/keydonkey/internal/vrf"
-	"github.com/transparency-dev/tessera"
 )
 
 type Directory struct {
-	pk       *vrf.ProvingKey
-	ck       []byte
-	tree     *prefix.Tree
-	keys     map[string]key
-	appender *tessera.Appender
+	pk    *vrf.ProvingKey
+	ck    []byte
+	tree  *prefix.Tree
+	store Store
 }
 
-func NewDirectory(storage prefix.Storage, privateKey ed25519.PrivateKey, appender *tessera.Appender) (*Directory, error) {
+func NewDirectory(store Store, privateKey ed25519.PrivateKey) (*Directory, error) {
 	// Create a new prefix tree with the given storage.
-	tree := prefix.NewTree(sha256.Sum256, storage)
+	tree := prefix.NewTree(sha256.Sum256, store)
 
 	// Derive a VRF proving key from the seed.
 	pk := vrf.NewProvingKey(privateKey)
@@ -32,7 +30,7 @@ func NewDirectory(storage prefix.Storage, privateKey ed25519.PrivateKey, appende
 	// Derive an HMAC commitment key from the seed.
 	ck, _ := hkdf.Expand(sha256.New, privateKey.Seed(), "keydonkey commitment key derivation", 32)
 
-	return &Directory{pk: pk, ck: ck, tree: tree, keys: make(map[string]key), appender: appender}, nil
+	return &Directory{pk: pk, ck: ck, tree: tree, store: store}, nil
 }
 
 func (d *Directory) VerifyingKey() *vrf.VerifyingKey {
@@ -67,15 +65,14 @@ func (d *Directory) Publish(ctx context.Context, id string, pk ed25519.PublicKey
 	}
 
 	// Append the label and commitment to the transparency log.
-	_, err := d.appender.Add(ctx, tessera.NewEntry(slices.Concat(label[:], commitment[:])))()
-	if err != nil {
+	if err := d.store.Log(ctx, slices.Concat(label[:], commitment[:])); err != nil {
 		return nil, err
 	}
 
 	// Insert the key into the shared database.
-	d.keys[id] = key{
-		pk:      pk,
-		version: version,
+	dbValue := binary.BigEndian.AppendUint64(append(make([]byte, 0, 32+8), pk...), version)
+	if err := d.store.PutKey(ctx, []byte(id), dbValue); err != nil {
+		return nil, err
 	}
 
 	// Read the current root hash of the prefix tree. This may be a later root hash than the one in which the key was
@@ -115,8 +112,8 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 	}
 
 	// Lookup the key from the database by ID.
-	key, ok := d.keys[id]
-	if !ok {
+	key, found, err := d.store.GetKey(ctx, []byte(id))
+	if !found {
 		// Generate a VRF proof and hash from the non-existent key ID and a version of 0.
 		vrfProof, vrfHash := d.pk.Prove(vrfInput(id, 0))
 
@@ -145,8 +142,11 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 		}, nil
 	}
 
+	pk := key[:32]
+	version := binary.BigEndian.Uint64(key[32:])
+
 	// Generate a VRF proof and hash from the key ID and version.
-	vrfProof, vrfHash := d.pk.Prove(vrfInput(id, key.version))
+	vrfProof, vrfHash := d.pk.Prove(vrfInput(id, version))
 
 	// Truncate the VRF hash and use as the prefix tree label.
 	copy(label[:], vrfHash[:32])
@@ -163,15 +163,15 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 	// Re-derive the commitment opening via HMAC(ck, label || version || pk).
 	h := hmac.New(sha256.New, d.ck)
 	h.Write(label[:])
-	_ = binary.Write(h, binary.BigEndian, key.version)
-	h.Write(key.pk)
+	_ = binary.Write(h, binary.BigEndian, version)
+	h.Write(pk)
 	h.Sum(opening[:0])
 
 	// Return the key and all information required to verify the index proof and the membership proof.
 	return &LookupResult{
 		ID:              id,
-		Version:         key.version,
-		PublicKey:       key.pk,
+		Version:         version,
+		PublicKey:       pk,
 		MembershipProof: membershipProof,
 		RootHash:        rootHash,
 		Found:           true,
@@ -255,11 +255,6 @@ func (r *LookupResult) Verify(vk *vrf.VerifyingKey) bool {
 		return false
 	}
 	return true
-}
-
-type key struct {
-	pk      ed25519.PublicKey
-	version uint64
 }
 
 func vrfInput(id string, version uint64) ed25519.PublicKey {
