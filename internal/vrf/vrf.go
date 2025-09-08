@@ -22,12 +22,12 @@ type VerifyingKey struct {
 
 // NewVerifyingKey deserializes the given byte slice into a VerifyingKey. Returns an error if the byte slice is not a
 // valid Ed25519 point.
-func NewVerifyingKey(b []byte) (*VerifyingKey, error) {
-	q, err := new(edwards25519.Point).SetBytes(b)
+func NewVerifyingKey(publicKey ed25519.PublicKey) (*VerifyingKey, error) {
+	q, err := new(edwards25519.Point).SetBytes(publicKey)
 	if err != nil {
 		return nil, err
 	}
-	return &VerifyingKey{y: q, encoded: b}, nil
+	return &VerifyingKey{y: q, encoded: publicKey}, nil
 }
 
 // Verify the given input and proof. Returns a hash of the proof if valid, ErrInvalidProof if invalid.
@@ -109,7 +109,7 @@ func NewProvingKey(key ed25519.PrivateKey) *ProvingKey {
 		prefix: h[32:],
 		VerifyingKey: VerifyingKey{
 			y:       q,
-			encoded: q.Bytes(),
+			encoded: key.Public().(ed25519.PublicKey),
 		},
 	}
 }
