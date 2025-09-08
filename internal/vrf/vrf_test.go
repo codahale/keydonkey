@@ -2,6 +2,7 @@ package vrf
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -10,7 +11,9 @@ import (
 func TestExamples(t *testing.T) {
 	for _, tv := range testVectors {
 		t.Run(tv.Name, func(t *testing.T) {
-			sk := NewProvingKey(tv.SK)
+			privateKey := ed25519.NewKeyFromSeed(tv.SK)
+
+			sk := NewProvingKey(privateKey)
 			if got, want := sk.VerifyingKey.encoded, tv.PK; !bytes.Equal(got, want) {
 				t.Errorf("NewProvingKey(%x) = %x, want = %x", tv.SK, got, want)
 			}

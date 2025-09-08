@@ -6,7 +6,6 @@ import (
 	"crypto/sha512"
 	"encoding"
 	"errors"
-	"strconv"
 
 	"filippo.io/edwards25519"
 	h2c "github.com/bytemare/hash2curve/edwards25519"
@@ -94,13 +93,9 @@ type ProvingKey struct {
 
 // NewProvingKey derives a ProvingKey and VerifyingKey pair from the given seed value. It will panic if len(seed) is not
 // ed25519.SeedSize.
-func NewProvingKey(seed []byte) *ProvingKey {
-	if len(seed) != ed25519.SeedSize {
-		panic("vrf: bad seed length: " + strconv.Itoa(len(seed)))
-	}
-
+func NewProvingKey(key ed25519.PrivateKey) *ProvingKey {
 	hs := sha512.New()
-	hs.Write(seed)
+	hs.Write(key.Seed())
 	h := hs.Sum(nil)
 
 	x, err := edwards25519.NewScalar().SetBytesWithClamping(h[:32])
