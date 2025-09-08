@@ -1,12 +1,14 @@
 package akd
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"testing"
 
 	"filippo.io/torchwood/prefix"
+	"github.com/transparency-dev/tessera"
 )
 
 func TestRoundTrip(t *testing.T) {
@@ -20,7 +22,18 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	akd, err := NewDirectory(storage, privateKey)
+	var entries []*tessera.Entry
+	appender := tessera.Appender{Add: func(ctx context.Context, entry *tessera.Entry) tessera.IndexFuture {
+		return func() (tessera.Index, error) {
+			entries = append(entries, entry)
+			return tessera.Index{
+				Index: 1,
+				IsDup: false,
+			}, nil
+		}
+	}}
+
+	akd, err := NewDirectory(storage, privateKey, &appender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,5 +63,9 @@ func TestRoundTrip(t *testing.T) {
 
 	if !lookupRes.Verify(akd.VerifyingKey()) {
 		t.Error("did not verify")
+	}
+
+	if got, want := len(entries), 1; got != want {
+		t.Errorf("got %d entries, want %d", got, want)
 	}
 }

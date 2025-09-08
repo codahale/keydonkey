@@ -7,19 +7,22 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"slices"
 
 	"filippo.io/torchwood/prefix"
 	"github.com/codahale/keydonkey/internal/vrf"
+	"github.com/transparency-dev/tessera"
 )
 
 type Directory struct {
-	pk   *vrf.ProvingKey
-	ck   []byte
-	tree *prefix.Tree
-	keys map[string]key
+	pk       *vrf.ProvingKey
+	ck       []byte
+	tree     *prefix.Tree
+	keys     map[string]key
+	appender *tessera.Appender
 }
 
-func NewDirectory(storage prefix.Storage, privateKey ed25519.PrivateKey) (*Directory, error) {
+func NewDirectory(storage prefix.Storage, privateKey ed25519.PrivateKey, appender *tessera.Appender) (*Directory, error) {
 	// Create a new prefix tree with the given storage.
 	tree := prefix.NewTree(sha256.Sum256, storage)
 
@@ -29,7 +32,7 @@ func NewDirectory(storage prefix.Storage, privateKey ed25519.PrivateKey) (*Direc
 	// Derive an HMAC commitment key from the seed.
 	ck, _ := hkdf.Expand(sha256.New, privateKey.Seed(), "keydonkey commitment key derivation", 32)
 
-	return &Directory{pk: pk, ck: ck, tree: tree, keys: make(map[string]key)}, nil
+	return &Directory{pk: pk, ck: ck, tree: tree, keys: make(map[string]key), appender: appender}, nil
 }
 
 func (d *Directory) VerifyingKey() *vrf.VerifyingKey {
@@ -60,6 +63,12 @@ func (d *Directory) Publish(ctx context.Context, id string, pk ed25519.PublicKey
 	// Insert the label and the commitment into the prefix tree. Both are opaque values which do not reveal information
 	// about the key ID, the key version, or the key itself.
 	if err := d.tree.Insert(ctx, label, commitment); err != nil {
+		return nil, err
+	}
+
+	// Append the label and commitment to the transparency log.
+	_, err := d.appender.Add(ctx, tessera.NewEntry(slices.Concat(label[:], commitment[:])))()
+	if err != nil {
 		return nil, err
 	}
 
