@@ -7,22 +7,23 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
-	"slices"
 
 	"filippo.io/torchwood/prefix"
+	"github.com/codahale/keydonkey/internal/storage"
 	"github.com/codahale/keydonkey/internal/vrf"
 )
 
 type Directory struct {
-	pk    *vrf.ProvingKey
-	ck    []byte
-	tree  *prefix.Tree
-	store Store
+	pk   *vrf.ProvingKey
+	ck   []byte
+	keys storage.KeyStore
+	log  storage.LogStore
+	tree *prefix.Tree
 }
 
-func NewDirectory(store Store, privateKey ed25519.PrivateKey) (*Directory, error) {
+func NewDirectory(privateKey ed25519.PrivateKey, keys storage.KeyStore, nodes storage.NodeStore, log storage.LogStore) (*Directory, error) {
 	// Create a new prefix tree with the given storage.
-	tree := prefix.NewTree(sha256.Sum256, store)
+	tree := prefix.NewTree(sha256.Sum256, nodes)
 
 	// Derive a VRF proving key from the seed.
 	pk := vrf.NewProvingKey(privateKey)
@@ -30,7 +31,13 @@ func NewDirectory(store Store, privateKey ed25519.PrivateKey) (*Directory, error
 	// Derive an HMAC commitment key from the seed.
 	ck, _ := hkdf.Expand(sha256.New, privateKey.Seed(), "keydonkey commitment key derivation", 32)
 
-	return &Directory{pk: pk, ck: ck, tree: tree, store: store}, nil
+	return &Directory{
+		pk:   pk,
+		ck:   ck,
+		keys: keys,
+		log:  log,
+		tree: tree,
+	}, nil
 }
 
 func (d *Directory) VerifyingKey() *vrf.VerifyingKey {
@@ -65,13 +72,12 @@ func (d *Directory) Publish(ctx context.Context, id string, pk ed25519.PublicKey
 	}
 
 	// Append the label and commitment to the transparency log.
-	if err := d.store.Log(ctx, slices.Concat(label[:], commitment[:])); err != nil {
+	if err := d.log.Add(ctx, label[:], commitment[:]); err != nil {
 		return nil, err
 	}
 
 	// Insert the key into the shared database.
-	dbValue := binary.BigEndian.AppendUint64(append(make([]byte, 0, 32+8), pk...), version)
-	if err := d.store.PutKey(ctx, []byte(id), dbValue); err != nil {
+	if err := d.keys.Put(ctx, id, pk, version); err != nil {
 		return nil, err
 	}
 
@@ -112,7 +118,10 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 	}
 
 	// Lookup the key from the database by ID.
-	key, found, err := d.store.GetKey(ctx, []byte(id))
+	found, pk, version, err := d.keys.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	if !found {
 		// Generate a VRF proof and hash from the non-existent key ID and a version of 0.
 		vrfProof, vrfHash := d.pk.Prove(vrfInput(id, 0))
@@ -141,9 +150,6 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 			IndexOpening:    nil,
 		}, nil
 	}
-
-	pk := key[:32]
-	version := binary.BigEndian.Uint64(key[32:])
 
 	// Generate a VRF proof and hash from the key ID and version.
 	vrfProof, vrfHash := d.pk.Prove(vrfInput(id, version))
