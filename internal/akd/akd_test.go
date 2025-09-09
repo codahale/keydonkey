@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"filippo.io/torchwood/prefix"
 	"github.com/codahale/keydonkey/internal/storage"
+	"github.com/transparency-dev/tessera"
+	"github.com/transparency-dev/tessera/storage/posix"
 )
 
 func TestRoundTrip(t *testing.T) {
@@ -52,15 +55,25 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	log, err := storage.NewFSLogStore(t.Context(), filepath.Join(dir, "logs"), signer)
+	driver, err := posix.New(t.Context(), posix.Config{Path: filepath.Join(dir, "log")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appender, shutdown, reader, err := tessera.NewAppender(t.Context(), driver, tessera.NewAppendOptions().
+		WithCheckpointSigner(signer).
+		WithCheckpointInterval(100*time.Millisecond).
+		WithBatching(10, time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := log.Shutdown(t.Context()); err != nil {
+		if err := shutdown(t.Context()); err != nil {
 			t.Log(err)
 		}
 	})
+
+	log := storage.NewTesseraLog(appender)
 
 	akd, err := NewDirectory(privateKey, keys, nodes, log)
 	if err != nil {
@@ -76,6 +89,14 @@ func TestRoundTrip(t *testing.T) {
 		t.Error("did not verify")
 	}
 
+	entries, err := reader.NextIndex(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := entries, uint64(0); got != want {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+
 	publishRes, err := akd.Publish(t.Context(), "dingus", make(ed25519.PublicKey, 32), 22)
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +104,14 @@ func TestRoundTrip(t *testing.T) {
 
 	if !publishRes.Verify(akd.VerifyingKey()) {
 		t.Error("did not verify")
+	}
+
+	entries, err = reader.NextIndex(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := entries, uint64(1); got != want {
+		t.Errorf("entries = %v, want %v", got, want)
 	}
 
 	lookupRes, err := akd.Lookup(t.Context(), "dingus", 20)
