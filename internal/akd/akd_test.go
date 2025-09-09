@@ -3,9 +3,13 @@ package akd
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/codahale/keydonkey/internal/storage/storagetest"
+	"filippo.io/torchwood/prefix"
+	"github.com/codahale/keydonkey/internal/storage"
 )
 
 func TestRoundTrip(t *testing.T) {
@@ -14,8 +18,51 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := storagetest.NewMemoryStore(t)
-	akd, err := NewDirectory(privateKey, store, store, store)
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, err := storage.NewFSNodeStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := nodes.Close(); err != nil {
+			t.Log(err)
+		}
+	})
+	if err := prefix.InitStorage(t.Context(), sha256.Sum256, nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := storage.NewFSKeyStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := keys.Close(); err != nil {
+			t.Log(err)
+		}
+	})
+
+	signer, err := storage.NewSigner("KeyDonkey", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := storage.NewFSLogStore(t.Context(), filepath.Join(dir, "logs"), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := log.Shutdown(t.Context()); err != nil {
+			t.Log(err)
+		}
+	})
+
+	akd, err := NewDirectory(privateKey, keys, nodes, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +92,5 @@ func TestRoundTrip(t *testing.T) {
 
 	if !lookupRes.Verify(akd.VerifyingKey()) {
 		t.Error("did not verify")
-	}
-
-	if got, want := len(store.LogEntries), 1; got != want {
-		t.Errorf("got %d entries, want %d", got, want)
 	}
 }
