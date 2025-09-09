@@ -11,7 +11,7 @@ type NodeStore interface {
 }
 
 type KeyStore interface {
-	Get(ctx context.Context, id string) (found bool, pk []byte, version uint64, err error)
+	Get(ctx context.Context, id string, minVersion uint64) (found bool, pk []byte, version uint64, err error)
 	Put(ctx context.Context, id string, pk []byte, version uint64) error
 }
 

@@ -108,7 +108,7 @@ func (d *Directory) Publish(ctx context.Context, id string, pk ed25519.PublicKey
 	}, nil
 }
 
-func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error) {
+func (d *Directory) Lookup(ctx context.Context, id string, minVersion uint64) (*LookupResult, error) {
 	var label, opening [32]byte
 
 	// Find the current root hash of the prefix tree. It's used for verifying both membership and non-membership proofs.
@@ -118,7 +118,7 @@ func (d *Directory) Lookup(ctx context.Context, id string) (*LookupResult, error
 	}
 
 	// Lookup the key from the database by ID.
-	found, pk, version, err := d.keys.Get(ctx, id)
+	found, pk, version, err := d.keys.Get(ctx, id, minVersion)
 	if err != nil {
 		return nil, err
 	}

@@ -67,7 +67,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	missing, err := akd.Lookup(t.Context(), "dingus")
+	missing, err := akd.Lookup(t.Context(), "dingus", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Error("did not verify")
 	}
 
-	lookupRes, err := akd.Lookup(t.Context(), "dingus")
+	lookupRes, err := akd.Lookup(t.Context(), "dingus", 20)
 	if err != nil {
 		t.Fatal(err)
 	}

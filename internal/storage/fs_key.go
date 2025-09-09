@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -27,8 +29,20 @@ func NewFSKeyStore(root *os.Root) (*FSKeyStore, error) {
 	return &FSKeyStore{root: root}, nil
 }
 
-func (s *FSKeyStore) Get(_ context.Context, id string) (found bool, pk []byte, version uint64, err error) {
-	_, filename := keyPathAndFilename(id)
+func (s *FSKeyStore) Get(_ context.Context, id string, minVersion uint64) (found bool, pk []byte, version uint64, err error) {
+	_, glob, filename := keyPathGlobAndFilename(id, minVersion)
+
+	matches, err := fs.Glob(s.root.FS(), glob)
+	if err != nil {
+		return false, nil, 0, err
+	}
+	for i := len(matches) - 1; i >= 0; i-- {
+		if matches[i] > filename {
+			filename = matches[i]
+			break
+		}
+	}
+
 	b, err := s.root.ReadFile(filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -51,7 +65,7 @@ func (s *FSKeyStore) Put(_ context.Context, id string, pk []byte, version uint64
 		return err
 	}
 
-	path, filename := keyPathAndFilename(id)
+	path, _, filename := keyPathGlobAndFilename(id, version)
 	if path != "" {
 		if err := s.root.MkdirAll(path, 0777); err != nil {
 			return err
@@ -75,12 +89,13 @@ type keyData struct {
 	Version uint64
 }
 
-func keyPathAndFilename(id string) (path, filename string) {
+func keyPathGlobAndFilename(id string, version uint64) (path, glob, filename string) {
 	hash := sha256.Sum256([]byte(id))
 	hexLabel := hex.EncodeToString(hash[:])
 	path = filepath.Join(hexLabel[:2], hexLabel[2:4])
-	filename = filepath.Join(hexLabel[:2], hexLabel[2:4], hexLabel+".json")
-	return path, filename
+	glob = filepath.Join(hexLabel[:2], hexLabel[2:4], fmt.Sprintf("%s-*.json", hexLabel))
+	filename = filepath.Join(hexLabel[:2], hexLabel[2:4], fmt.Sprintf("%s-%016x.json", hexLabel, version))
+	return path, glob, filename
 }
 
 var _ KeyStore = (*FSKeyStore)(nil)
