@@ -26,7 +26,7 @@ func NewKeyStore(bucket string, client *s3.Client) *KeyStore {
 }
 
 func (s *KeyStore) Get(ctx context.Context, id string, minVersion uint64) (found bool, pk []byte, version uint64, err error) {
-	glob, filename := keyGlobAndFilename(id, version)
+	glob, filename := keyGlobAndFilename(id, minVersion)
 
 	getResp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
