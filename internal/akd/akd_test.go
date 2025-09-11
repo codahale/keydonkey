@@ -16,7 +16,7 @@ import (
 )
 
 func TestRoundTrip(t *testing.T) {
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	pubKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Errorf("entries = %v, want %v", got, want)
 	}
 
-	publishRes, err := akd.Publish(t.Context(), "dingus", make(ed25519.PublicKey, 32), 22)
+	publishRes, err := akd.Publish(t.Context(), "dingus", pubKey, 22)
 	if err != nil {
 		t.Fatal(err)
 	}
